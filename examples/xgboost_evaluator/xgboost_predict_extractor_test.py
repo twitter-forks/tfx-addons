@@ -11,15 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for the custom scikit-learn Evaluator module."""
+"""Tests for the custom xgboost Evaluator module."""
 
 import os
 import pickle
-
+import pandas as pd
+import xgboost as xgb
 import apache_beam as beam
 from apache_beam.testing import util
 from google.protobuf import text_format
-from sklearn import neural_network as nn
+import tensorflow as tf
 from tensorflow_metadata.proto.v0 import schema_pb2
 from tensorflow_model_analysis import config
 from tensorflow_model_analysis import constants
@@ -29,18 +30,18 @@ from tensorflow_model_analysis.extractors import features_extractor
 from tfx_bsl.tfxio import tensor_adapter
 from tfx_bsl.tfxio import test_util
 
-import sklearn_predict_extractor
+import xgboost_predict_extractor
 
 
-class SklearnPredictExtractorTest(testutil.TensorflowModelAnalysisTest):
+class XGBoostPredictExtractorTest(testutil.TensorflowModelAnalysisTest):
 
   def setUp(self):
-    super(SklearnPredictExtractorTest, self).setUp()
+    super(XGBoostPredictExtractorTest, self).setUp()
     self._eval_export_dir = os.path.join(self._getTempDir(), 'eval_export')
-    self._create_sklearn_model(self._eval_export_dir)
-    self._eval_config = config.EvalConfig(model_specs=[config.ModelSpec()])
+    self._create_xgboost_model(self._eval_export_dir)
+    self._eval_config = config.EvalConfig(model_specs=[config.ModelSpec(name=None, label_key="label")])
     self._eval_shared_model = (
-        sklearn_predict_extractor.custom_eval_shared_model(
+        xgboost_predict_extractor.custom_eval_shared_model(
             eval_saved_model_path=self._eval_export_dir,
             model_name=None,
             eval_config=self._eval_config))
@@ -72,12 +73,12 @@ class SklearnPredictExtractorTest(testutil.TensorflowModelAnalysisTest):
         self._makeExample(age=5.0, language=0.0, label=0),
     ]
 
-  def testMakeSklearnPredictExtractor(self):
+  def testMakeXGBoostPredictExtractor(self):
     """Tests that predictions are made from extracts for a single model."""
     feature_extractor = features_extractor.FeaturesExtractor(self._eval_config)
     prediction_extractor = (
-        sklearn_predict_extractor._make_sklearn_predict_extractor(
-            self._eval_shared_model))
+        xgboost_predict_extractor._make_xgboost_predict_extractor(
+            self._eval_shared_model, self._eval_config))
     with beam.Pipeline() as pipeline:
       predict_extracts = (
           pipeline
@@ -99,32 +100,33 @@ class SklearnPredictExtractorTest(testutil.TensorflowModelAnalysisTest):
 
       util.assert_that(predict_extracts, check_result)
 
-  def testMakeSklearnPredictExtractorWithMultiModels(self):
+  def testMakeXGBoostPredictExtractorWithMultiModels(self):
     """Tests that predictions are made from extracts for multiple models."""
     eval_config = config.EvalConfig(model_specs=[
-        config.ModelSpec(name='model1'),
-        config.ModelSpec(name='model2'),
+        config.ModelSpec(name='model1', label_key="label"),
+        config.ModelSpec(name='model2', label_key="label"),
     ])
     eval_export_dir_1 = os.path.join(self._eval_export_dir, '1')
-    self._create_sklearn_model(eval_export_dir_1)
-    eval_shared_model_1 = sklearn_predict_extractor.custom_eval_shared_model(
+    self._create_xgboost_model(eval_export_dir_1)
+    eval_shared_model_1 = xgboost_predict_extractor.custom_eval_shared_model(
         eval_saved_model_path=eval_export_dir_1,
         model_name='model1',
         eval_config=eval_config)
     eval_export_dir_2 = os.path.join(self._eval_export_dir, '2')
-    self._create_sklearn_model(eval_export_dir_2)
-    eval_shared_model_2 = sklearn_predict_extractor.custom_eval_shared_model(
+    self._create_xgboost_model(eval_export_dir_2)
+    eval_shared_model_2 = xgboost_predict_extractor.custom_eval_shared_model(
         eval_saved_model_path=eval_export_dir_2,
         model_name='model2',
         eval_config=eval_config)
 
     feature_extractor = features_extractor.FeaturesExtractor(self._eval_config)
     prediction_extractor = (
-        sklearn_predict_extractor._make_sklearn_predict_extractor(
+        xgboost_predict_extractor._make_xgboost_predict_extractor(
             eval_shared_model={
                 'model1': eval_shared_model_1,
                 'model2': eval_shared_model_2,
-            }))
+            }, 
+            eval_config=eval_config))
     with beam.Pipeline() as pipeline:
       predict_extracts = (
           pipeline
@@ -149,35 +151,35 @@ class SklearnPredictExtractorTest(testutil.TensorflowModelAnalysisTest):
       util.assert_that(predict_extracts, check_result)
 
   def test_custom_eval_shared_model(self):
-    """Tests that an EvalSharedModel is created with a custom sklearn loader."""
+    """Tests that an EvalSharedModel is created with a custom xgboost loader."""
     model_file = os.path.basename(self._eval_shared_model.model_path)
-    self.assertEqual(model_file, 'model.pkl')
+    self.assertEqual(model_file, 'model.json')
     model = self._eval_shared_model.model_loader.construct_fn()
-    self.assertIsInstance(model, nn.MLPClassifier)
+    self.assertIsInstance(model, xgb.Booster)
 
   def test_custom_extractors(self):
-    """Tests that the sklearn extractor is used when creating extracts."""
-    extractors = sklearn_predict_extractor.custom_extractors(
+    """Tests that the xgboost extractor is used when creating extracts."""
+    extractors = xgboost_predict_extractor.custom_extractors(
         self._eval_shared_model, self._eval_config, self._tensor_adapter_config)
     self.assertLen(extractors, 6)
     self.assertIn(
-        'SklearnPredict', [extractor.stage_name for extractor in extractors])
+        'XGBoostPredict', [extractor.stage_name for extractor in extractors])
 
-  def _create_sklearn_model(self, eval_export_dir):
-    """Creates and pickles a toy scikit-learn model.
+  def _create_xgboost_model(self, eval_export_dir):
+    """Creates and pickles a toy xgboost model.
 
     Args:
-        eval_export_dir: Directory to store a pickled scikit-learn model. This
+        eval_export_dir: Directory to store a pickled xgboost model. This
             directory is created if it does not exist.
     """
-    x_train = [[3, 0], [4, 1]]
-    y_train = [0, 1]
-    model = nn.MLPClassifier(max_iter=1)
-    model.feature_keys = ['age', 'language']
-    model.label_key = 'label'
-    model.fit(x_train, y_train)
+    train = pd.DataFrame({"age": [3, 0], "language": [4, 1]})
+    label = pd.DataFrame({"label": [0, 1]})
+    param = {'max_depth': 2, 'eta': 1, 'objective': 'binary:logistic'}
+    train = xgb.DMatrix(train, label=label)
+    model = xgb.train(param, train)
 
     os.makedirs(eval_export_dir)
-    model_path = os.path.join(eval_export_dir, 'model.pkl')
-    with open(model_path, 'wb+') as f:
-      pickle.dump(model, f)
+    model.save_model(os.path.join(eval_export_dir, "model.json"))
+
+if __name__ == '__main__':
+  tf.test.main()
