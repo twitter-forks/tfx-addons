@@ -17,7 +17,7 @@
 /examples/sklearn_penguins/ @TheMichaelHu @1025kb
 
 # MLMD Client Library
-/tfx_addons/mlmd_client/ @codesue @pselden @casassg
+/tfx_addons/mlmd_client/ @casassg
 
 # ExampleFilter Component
 /tfx_addons/example_filter/ @rclough
